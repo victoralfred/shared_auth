@@ -1,19 +1,26 @@
-# Shared Auth Library
+# Shared Authentication Library
 
-> Reusable authentication and authorization library for microservices with embedded security.
+A production-ready authentication and authorization library for Go microservices following **interface-based design principles**.
 
-[![Go Version](https://img.shields.io/badge/go-1.21+-blue.svg)](https://golang.org/dl/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+## Architecture Philosophy
+
+This library is designed as a **pure abstraction** - it provides interfaces and business logic, but **NO infrastructure implementation**. Your service provides its own Redis, Vault, and other infrastructure components.
+
+### Key Principles
+
+1. **Public Interfaces, Private Implementations** - Depend only on stable contracts
+2. **Zero Infrastructure Dependencies** - No Redis, Vault, or database clients
+3. **Service-Provided Infrastructure** - You implement interfaces using YOUR infrastructure
+4. **Future-Proof** - Internal changes won't break your services
 
 ## Features
 
-- **Stateless JWT Verification**: Verify tokens without database queries
-- **Embedded Policy Engine**: Local permission evaluation with RBAC + ABAC support
-- **Gin Middleware**: Ready-to-use authentication and authorization middleware
-- **LRU Caching**: Built-in memory cache for authorization decisions
-- **Event-Driven**: Subscribe to policy updates via Kafka
-- **Zero Database Dependencies**: All verification happens locally
-- **Multi-tenant Support**: Built-in tenant isolation
+- ✅ **Stateless JWT Verification** - Pure cryptographic signature validation
+- ✅ **Policy Engine** - Local RBAC/ABAC evaluation without database queries
+- ✅ **Embedded Permissions** - JWT tokens contain all user permissions
+- ✅ **Multi-tenant Support** - Tenant-scoped policies and permissions
+- ✅ **Interface-Based** - Stable public contracts, flexible implementations
+- ✅ **Zero Infrastructure** - Bring your own Redis, Vault, etc.
 
 ## Installation
 
@@ -23,357 +30,376 @@ go get github.com/victoralfred/shared_auth
 
 ## Quick Start
 
-### Basic Authentication
+### Step 1: Implement the Cache Interface
+
+Using your service's own Redis client:
 
 ```go
-package main
-
-import (
-    "github.com/gin-gonic/gin"
-    "github.com/victoralfred/shared_auth/crypto"
-    "github.com/victoralfred/shared_auth/jwt"
-    "github.com/victoralfred/shared_auth/middleware"
-)
-
-func main() {
-    // Load public key
-    publicKey, err := crypto.LoadPublicKeyFromFile("/secrets/jwt-public.pem")
-    if err != nil {
-        panic(err)
-    }
-
-    // Create JWT verifier
-    verifier := jwt.NewVerifier(publicKey, "kubemanager", "my-service")
-
-    // Setup Gin router
-    router := gin.Default()
-
-    // Apply authentication middleware
-    router.Use(middleware.AuthMiddleware(verifier))
-
-    // Protected routes
-    router.GET("/profile", func(c *gin.Context) {
-        claims, _ := middleware.GetClaims(c)
-        c.JSON(200, gin.H{
-            "user_id": claims.UserID,
-            "email":   claims.Email,
-        })
-    })
-
-    router.Run(":8080")
-}
-```
-
-### Permission-Based Authorization
-
-```go
-package main
-
-import (
-    "github.com/gin-gonic/gin"
-    "github.com/victoralfred/shared_auth/crypto"
-    "github.com/victoralfred/shared_auth/jwt"
-    "github.com/victoralfred/shared_auth/middleware"
-)
-
-func main() {
-    publicKey, _ := crypto.LoadPublicKeyFromFile("/secrets/jwt-public.pem")
-    verifier := jwt.NewVerifier(publicKey, "kubemanager", "order-service")
-
-    router := gin.Default()
-    router.Use(middleware.AuthMiddleware(verifier))
-
-    // Require specific permission
-    router.POST("/orders",
-        middleware.RequirePermission("orders", "create"),
-        createOrderHandler,
-    )
-
-    router.GET("/orders/:id",
-        middleware.RequirePermission("orders", "read"),
-        getOrderHandler,
-    )
-
-    router.DELETE("/orders/:id",
-        middleware.RequirePermission("orders", "delete"),
-        deleteOrderHandler,
-    )
-
-    router.Run(":8080")
-}
-
-func createOrderHandler(c *gin.Context) {
-    claims, _ := middleware.GetClaims(c)
-
-    // User info from token (no database lookup needed)
-    order := Order{
-        UserID:   claims.UserID,
-        TenantID: claims.TenantID,
-    }
-
-    // ... create order logic
-    c.JSON(200, order)
-}
-```
-
-### Role-Based Authorization
-
-```go
-// Require admin role
-router.POST("/admin/users",
-    middleware.RequireAdmin(),
-    createUserHandler,
-)
-
-// Require specific role
-router.GET("/manager/reports",
-    middleware.RequireRole("manager"),
-    getReportsHandler,
-)
-```
-
-### Policy Engine (Advanced)
-
-```go
-package main
+// In your service: internal/adapters/cache.go
+package adapters
 
 import (
     "context"
+    "encoding/json"
+    "time"
+
+    "github.com/go-redis/redis/v8"
     "github.com/victoralfred/shared_auth/cache"
-    "github.com/victoralfred/shared_auth/policy"
 )
 
-func main() {
-    // Create policy engine with local cache
-    memCache := cache.NewMemoryCache(10000)
-    policyEngine := policy.NewEngine(memCache)
+type RedisCache struct {
+    client *redis.Client
+    prefix string
+}
 
-    // Load policies (from config, API, or Kafka)
-    policies := []policy.Policy{
-        {
-            ID:       "order-create-policy",
-            TenantID: "tenant-123",
-            Resource: "orders",
-            Actions:  []string{"create", "read"},
-            Roles:    []string{"customer", "manager"},
-        },
-    }
-    policyEngine.LoadPolicies(policies)
+func NewRedisCache(client *redis.Client, prefix string) cache.Cache {
+    return &RedisCache{client: client, prefix: prefix}
+}
 
-    // Check permission
-    req := policy.PermissionRequest{
-        UserID:   "user-456",
-        TenantID: "tenant-123",
-        Roles:    []string{"customer"},
-        Resource: "orders",
-        Action:   "create",
+func (r *RedisCache) Get(key string) (interface{}, bool) {
+    val, err := r.client.Get(context.Background(), r.prefix+key).Result()
+    if err != nil {
+        return nil, false
     }
+    var result interface{}
+    json.Unmarshal([]byte(val), &result)
+    return result, true
+}
 
-    decision, _ := policyEngine.CheckPermission(context.Background(), req)
-    if decision.Allowed {
-        println("Access granted:", decision.Message)
+func (r *RedisCache) Set(key string, value interface{}, ttl time.Duration) error {
+    data, _ := json.Marshal(value)
+    return r.client.Set(context.Background(), r.prefix+key, data, ttl).Err()
+}
+
+func (r *RedisCache) Delete(key string) error {
+    return r.client.Del(context.Background(), r.prefix+key).Err()
+}
+
+func (r *RedisCache) DeletePattern(pattern string) error {
+    iter := r.client.Scan(context.Background(), 0, r.prefix+pattern, 0).Iterator()
+    keys := []string{}
+    for iter.Next(context.Background()) {
+        keys = append(keys, iter.Val())
     }
+    if len(keys) > 0 {
+        return r.client.Del(context.Background(), keys...).Err()
+    }
+    return nil
+}
+
+func (r *RedisCache) Exists(key string) bool {
+    count, _ := r.client.Exists(context.Background(), r.prefix+key).Result()
+    return count > 0
+}
+
+func (r *RedisCache) Size() int {
+    count, _ := r.client.DBSize(context.Background()).Result()
+    return int(count)
+}
+
+func (r *RedisCache) HitRate() float64 {
+    return 0.0 // Implement if needed
+}
+
+func (r *RedisCache) Clear() error {
+    return r.client.FlushDB(context.Background()).Err()
 }
 ```
 
-## Package Overview
+### Step 2: Load JWT Keys From Your Vault
 
-### `jwt/` - JWT Verification
-Stateless JWT verification with RSA-256 signatures.
-
-```go
-import "github.com/victoralfred/shared_auth/jwt"
-
-verifier := jwt.NewVerifier(publicKey, "issuer", "audience")
-claims, err := verifier.VerifyToken(tokenString)
-```
-
-### `policy/` - Policy Engine
-Local RBAC/ABAC evaluation without database queries.
+Using your service's own Vault client:
 
 ```go
-import "github.com/victoralfred/shared_auth/policy"
+// Using your existing Vault infrastructure
+import "github.com/victoralfred/kube_manager/pkg/vault"
 
-engine := policy.NewEngine(cache)
-decision, _ := engine.CheckPermission(ctx, request)
+vaultClient, _ := vault.NewClient(vault.Config{
+    Address:    os.Getenv("VAULT_ADDR"),
+    Token:      os.Getenv("VAULT_TOKEN"),
+    MountPath:  "secret",
+    SecretPath: "kube_manager",
+})
+
+// Load JWT public key from YOUR Vault
+secretData, _ := vaultClient.GetSecret(context.Background(), "jwt")
+publicKeyPEM := secretData["public_key"].(string)
+
+// Parse the key
+publicKey, _ := crypto.ParsePublicKey([]byte(publicKeyPEM))
 ```
 
-### `middleware/` - Gin Middleware
-Ready-to-use middleware for Gin framework.
+### Step 3: Initialize Shared Auth Components
 
 ```go
-import "github.com/victoralfred/shared_auth/middleware"
+package main
 
-router.Use(middleware.AuthMiddleware(verifier))
-router.Use(middleware.TenantMiddleware())
+import (
+    "github.com/go-redis/redis/v8"
+    "github.com/victoralfred/shared_auth/jwt"
+    "github.com/victoralfred/shared_auth/policy"
+    "github.com/victoralfred/shared_auth/middleware"
+
+    "your-service/internal/adapters"  // Your cache adapter
+)
+
+func main() {
+    // 1. Create YOUR infrastructure
+    redisClient := redis.NewClient(&redis.Options{
+        Addr: "localhost:6379",
+    })
+
+    // 2. Create adapters
+    authCache := adapters.NewRedisCache(redisClient, "auth:")
+
+    // 3. Create JWT verifier (returns interface)
+    verifier := jwt.NewVerifier(publicKey, "kubemanager", "my-service")
+
+    // 4. Create policy engine (inject YOUR cache)
+    engine := policy.NewEngine(authCache)
+
+    // 5. Load policies
+    policies := []policy.Policy{
+        {
+            ID:       "customer-read",
+            TenantID: "*",
+            Resource: "orders",
+            Actions:  []string{"read"},
+            Roles:    []string{"customer"},
+        },
+    }
+    engine.LoadPolicies(policies)
+
+    // 6. Use in Gin middleware
+    router := gin.Default()
+    router.Use(middleware.AuthMiddleware(verifier))
+
+    router.GET("/orders",
+        middleware.RequirePermission("orders", "read"),
+        listOrders,
+    )
+
+    router.Run(":8080")
+}
 ```
 
-### `cache/` - Caching
-LRU in-memory cache for authorization decisions.
+## Public Interfaces
+
+### jwt.Verifier
+
+```go
+type Verifier interface {
+    VerifyToken(tokenString string) (*Claims, error)
+    VerifyAccessToken(tokenString string) (*Claims, error)
+    VerifyRefreshToken(tokenString string) (*Claims, error)
+}
+
+// Factory function
+func NewVerifier(publicKey *rsa.PublicKey, issuer, audience string) Verifier
+```
+
+### policy.Engine
+
+```go
+type Engine interface {
+    LoadPolicies(policies []Policy) error
+    CheckPermission(ctx context.Context, req PermissionRequest) (*Decision, error)
+    InvalidateCache(userID, tenantID string) error
+    Stats() EngineStats
+}
+
+// Factory function
+func NewEngine(cacheBackend cache.Cache) Engine
+```
+
+### cache.Cache
+
+```go
+type Cache interface {
+    Get(key string) (interface{}, bool)
+    Set(key string, value interface{}, ttl time.Duration) error
+    Delete(key string) error
+    DeletePattern(pattern string) error
+    Exists(key string) bool
+    Size() int
+    HitRate() float64
+    Clear() error
+}
+```
+
+**You implement this interface using YOUR Redis, Memcached, or any other cache.**
+
+## Why Interface-Based Design?
+
+### ❌ Problem With Traditional Approach
+
+```go
+// BAD: Library owns infrastructure
+shared_auth/
+├── vault/client.go      // ❌ Conflicts with your Vault
+├── cache/redis.go       // ❌ Conflicts with your Redis
+```
+
+**Issues:**
+- Dependency version conflicts
+- Can't customize infrastructure
+- Hard to test (can't inject mocks)
+- Library updates break your service
+
+### ✅ Solution: Interface-Based Design
+
+```go
+// GOOD: Library provides interfaces only
+shared_auth/
+├── cache/cache.go       // ✅ Interface only
+├── jwt/interface.go     // ✅ Public contract
+├── policy/interface.go  // ✅ Public contract
+
+// You implement using YOUR infrastructure
+your-service/
+├── pkg/vault/           // ✅ Your Vault client
+├── internal/adapters/   // ✅ Implements shared_auth interfaces
+    └── cache.go         // ✅ Uses YOUR Redis
+```
+
+**Benefits:**
+- ✅ No conflicts - single source of truth
+- ✅ Fully customizable - use any infrastructure
+- ✅ Testable - inject mocks easily
+- ✅ Future-proof - internal changes don't break you
+
+## Testing
+
+### Unit Tests
+
+Use the provided mock cache for testing:
 
 ```go
 import "github.com/victoralfred/shared_auth/cache"
 
-cache := cache.NewMemoryCache(10000)
-cache.Set("key", value, 5*time.Minute)
+func TestMyService(t *testing.T) {
+    // Use mock cache (no Redis needed)
+    mockCache := cache.NewMockCache()
+
+    // Create engine
+    engine := policy.NewEngine(mockCache)
+
+    // Run tests...
+}
 ```
 
-### `events/` - Event Pub/Sub
-Kafka integration for policy synchronization.
+### Integration Tests
+
+Use your real infrastructure:
 
 ```go
-import "github.com/victoralfred/shared_auth/events"
+func TestIntegration(t *testing.T) {
+    // Use real Redis
+    redisClient := redis.NewClient(&redis.Options{
+        Addr: "localhost:6379",
+    })
 
-publisher := events.NewPublisher(brokers, topic)
-publisher.PublishPolicyUpdate(ctx, event)
+    authCache := adapters.NewRedisCache(redisClient, "test:")
+    engine := policy.NewEngine(authCache)
+
+    // Run integration tests...
+}
 ```
 
-### `crypto/` - Key Management
-RSA key loading and management utilities.
+## Documentation
+
+- [Architecture Guide](docs/ARCHITECTURE.md) - Interface-based design principles
+- [API Reference](https://pkg.go.dev/github.com/victoralfred/shared_auth) - Full godoc
+
+## Key Components
+
+### JWT Verification
 
 ```go
-import "github.com/victoralfred/shared_auth/crypto"
+// Stateless verification - no database queries
+verifier := jwt.NewVerifier(publicKey, "kubemanager", "my-service")
 
-publicKey, err := crypto.LoadPublicKeyFromFile(path)
+claims, err := verifier.VerifyToken(tokenString)
+if err != nil {
+    // Invalid token
+}
+
+// Check embedded permissions
+if claims.HasPermission("orders", "create") {
+    // User can create orders
+}
 ```
 
-## Architecture
+### Policy Engine
 
-```
-┌─────────────────────────────────────────────┐
-│           Your Microservice                  │
-│  ┌───────────────────────────────────────┐  │
-│  │   Gin Router                          │  │
-│  │   + AuthMiddleware(verifier)          │  │
-│  │   + RequirePermission("orders", "create")│  │
-│  └───────────────────────────────────────┘  │
-│           │                                  │
-│           ▼                                  │
-│  ┌───────────────────────────────────────┐  │
-│  │   JWT Verifier                        │  │
-│  │   (Stateless - No Database)           │  │
-│  └───────────────────────────────────────┘  │
-│           │                                  │
-│           ▼                                  │
-│  ┌───────────────────────────────────────┐  │
-│  │   Policy Engine                       │  │
-│  │   (Local Evaluation)                  │  │
-│  │   ┌─────────────┐ ┌───────────────┐  │  │
-│  │   │ Policy Store│ │ Memory Cache  │  │  │
-│  │   └─────────────┘ └───────────────┘  │  │
-│  └───────────────────────────────────────┘  │
-│           ▲                                  │
-│           │ Policy Updates via Kafka        │
-└───────────┼──────────────────────────────────┘
-            │
-     ┌──────┴──────┐
-     │    Kafka    │
-     └──────┬──────┘
-            │
-┌───────────┴──────────────────────────────────┐
-│         KubeManager (Central Auth)           │
-│  ┌───────────────────────────────────────┐  │
-│  │   User Management                      │  │
-│  │   Token Generation (with permissions)  │  │
-│  │   Policy Publishing                    │  │
-│  └───────────────────────────────────────┘  │
-└──────────────────────────────────────────────┘
+```go
+// Local RBAC/ABAC evaluation - no database queries
+decision, err := engine.CheckPermission(ctx, policy.PermissionRequest{
+    UserID:   "user-123",
+    TenantID: "tenant-456",
+    Roles:    []string{"manager"},
+    Resource: "orders",
+    Action:   "create",
+    Context: map[string]interface{}{
+        "department": "finance",
+    },
+})
+
+if decision.Allowed {
+    // Permission granted
+}
 ```
 
-## Benefits
+### Middleware
 
-### Performance
-- **80% latency reduction**: Authorization completes in <5ms (vs 30ms+ with network calls)
-- **No network overhead**: Everything verified locally
-- **Cache-friendly**: LRU cache for repeated authorization checks
+```go
+// Authentication middleware
+router.Use(middleware.AuthMiddleware(verifier))
 
-### Scalability
-- **No bottleneck**: Each service scales independently
-- **Stateless verification**: No shared state between instances
-- **Horizontal scaling**: Add more instances without coordination
+// Permission-based authorization
+router.POST("/orders",
+    middleware.RequirePermission("orders", "create"),
+    createOrder,
+)
 
-### Resilience
-- **No single point of failure**: Services operate independently
-- **Graceful degradation**: Continue with cached policies if Kafka is down
-- **Fault isolation**: Auth service issues don't cascade
-
-## Configuration
-
-### Environment Variables
-
-```bash
-# JWT Configuration
-export JWT_PUBLIC_KEY_PATH=/secrets/jwt-public.pem
-export JWT_ISSUER=kubemanager
-export JWT_AUDIENCE=my-service
-
-# Kafka Configuration
-export KAFKA_BROKERS=localhost:9092,localhost:9093
-export KAFKA_TOPIC_POLICY_UPDATES=kubemanager.policy.updates
-export KAFKA_CONSUMER_GROUP=my-service-security
+// Role-based authorization
+router.GET("/admin",
+    middleware.RequireAdmin(),
+    adminDashboard,
+)
 ```
 
-### YAML Configuration
+## Migration From Old Design
 
-```yaml
-auth:
-  jwt:
-    public_key_path: /secrets/jwt-public.pem
-    issuer: kubemanager
-    audience: order-service
+If you were using an older version with built-in Vault/Redis:
 
-  policy:
-    cache_size: 10000
-    cache_ttl: 5m
+1. **Create cache adapter** (see Step 1 above)
+2. **Load keys from YOUR Vault** (see Step 2 above)
+3. **Inject dependencies** (see Step 3 above)
 
-  kafka:
-    brokers:
-      - localhost:9092
-    topics:
-      policy_updates: kubemanager.policy.updates
-    consumer_group: order-service-security
-```
-
-## Examples
-
-See the [`examples/`](./examples/) directory for complete working examples:
-
-- **[basic_auth](./examples/basic_auth)** - Simple JWT authentication
-- **[embedded_service](./examples/embedded_service)** - Full microservice with embedded security
-- **[policy_sync](./examples/policy_sync)** - Policy synchronization via Kafka
-
-## Testing
-
-```bash
-# Run all tests
-go test ./...
-
-# Run with coverage
-go test -cover ./...
-
-# Run specific package
-go test -v ./jwt
-```
+The public interfaces remain the same - only how you create them changes.
 
 ## Contributing
 
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details.
+1. Fork the repository
+2. Create feature branch
+3. Make changes (keep interfaces stable!)
+4. Add tests
+5. Submit pull request
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE)
 
-## Related Projects
+## Version
 
-- [kube_manager](https://github.com/victoralfred/kube_manager) - Central authentication service
-- [Order Service Example](https://github.com/victoralfred/order-service-example) - Example microservice using shared_auth
+Current: v2.0.0 (Interface-based design)
 
-## Support
+## Breaking Changes from v1.x
 
-For questions or issues:
-- Open an issue on [GitHub](https://github.com/victoralfred/shared_auth/issues)
-- Email: voseghale1@gmail.com
+- Removed built-in Vault client
+- Removed built-in Redis implementation
+- All implementations now private (use interfaces)
+- Services must implement `cache.Cache` interface
 
----
-
-**Made with ❤️ for microservices**
+See [CHANGELOG.md](CHANGELOG.md) for details.

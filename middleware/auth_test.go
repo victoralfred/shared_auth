@@ -13,7 +13,7 @@ import (
 	"github.com/victoralfred/shared_auth/jwt"
 )
 
-func setupTestRouter(verifier *jwt.Verifier) *gin.Engine {
+func setupTestRouter(verifier jwt.Verifier) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	return router

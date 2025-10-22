@@ -8,7 +8,7 @@ import (
 )
 
 // AuthMiddleware creates Gin middleware for JWT authentication
-func AuthMiddleware(verifier *jwt.Verifier) gin.HandlerFunc {
+func AuthMiddleware(verifier jwt.Verifier) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Extract token from header
 		authHeader := c.GetHeader("Authorization")
@@ -47,7 +47,7 @@ func AuthMiddleware(verifier *jwt.Verifier) gin.HandlerFunc {
 }
 
 // OptionalAuthMiddleware provides optional authentication
-func OptionalAuthMiddleware(verifier *jwt.Verifier) gin.HandlerFunc {
+func OptionalAuthMiddleware(verifier jwt.Verifier) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {

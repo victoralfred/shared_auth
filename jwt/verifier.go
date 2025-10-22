@@ -10,17 +10,38 @@ import (
 	"time"
 )
 
-// Verifier provides stateless JWT verification
-// NO database dependencies - pure cryptographic verification
-type Verifier struct {
+// verifier is the private implementation of the Verifier interface.
+//
+// This struct is private to allow internal changes without breaking clients.
+// Clients should only depend on the public Verifier interface.
+type verifier struct {
 	publicKey *rsa.PublicKey
 	issuer    string
 	audience  string
 }
 
-// NewVerifier creates a JWT verifier with public key
-func NewVerifier(publicKey *rsa.PublicKey, issuer, audience string) *Verifier {
-	return &Verifier{
+// NewVerifier creates a JWT verifier with public key.
+//
+// Returns the public Verifier interface to hide implementation details.
+// This allows the internal implementation to change without breaking clients.
+//
+// Parameters:
+//   - publicKey: RSA public key for signature verification
+//   - issuer: Expected JWT issuer (iss claim)
+//   - audience: Expected JWT audience (aud claim)
+//
+// Example:
+//
+//	// Load public key using your own infrastructure
+//	publicKey, _ := loadPublicKeyFromVault()
+//
+//	// Create verifier (returns interface)
+//	verifier := jwt.NewVerifier(publicKey, "kubemanager", "my-service")
+//
+//	// Use through interface
+//	claims, err := verifier.VerifyToken(tokenString)
+func NewVerifier(publicKey *rsa.PublicKey, issuer, audience string) Verifier {
+	return &verifier{
 		publicKey: publicKey,
 		issuer:    issuer,
 		audience:  audience,
@@ -29,7 +50,7 @@ func NewVerifier(publicKey *rsa.PublicKey, issuer, audience string) *Verifier {
 
 // VerifyToken verifies JWT signature and standard claims
 // Does NOT check revocation status or database
-func (v *Verifier) VerifyToken(tokenString string) (*Claims, error) {
+func (v *verifier) VerifyToken(tokenString string) (*Claims, error) {
 	// Split token into parts
 	parts := strings.Split(tokenString, ".")
 	if len(parts) != 3 {
@@ -83,13 +104,13 @@ func (v *Verifier) VerifyToken(tokenString string) (*Claims, error) {
 }
 
 // verifySignature verifies RSA signature
-func (v *Verifier) verifySignature(data []byte, signature []byte) error {
+func (v *verifier) verifySignature(data []byte, signature []byte) error {
 	hash := sha256.Sum256(data)
 	return rsa.VerifyPKCS1v15(v.publicKey, crypto.SHA256, hash[:], signature)
 }
 
 // validateClaims validates standard JWT claims
-func (v *Verifier) validateClaims(claims *Claims) error {
+func (v *verifier) validateClaims(claims *Claims) error {
 	now := time.Now().Unix()
 
 	// Check expiration
@@ -116,7 +137,7 @@ func (v *Verifier) validateClaims(claims *Claims) error {
 }
 
 // VerifyRefreshToken specifically for refresh tokens
-func (v *Verifier) VerifyRefreshToken(tokenString string) (*Claims, error) {
+func (v *verifier) VerifyRefreshToken(tokenString string) (*Claims, error) {
 	claims, err := v.VerifyToken(tokenString)
 	if err != nil {
 		return nil, err
@@ -130,7 +151,7 @@ func (v *Verifier) VerifyRefreshToken(tokenString string) (*Claims, error) {
 }
 
 // VerifyAccessToken specifically for access tokens
-func (v *Verifier) VerifyAccessToken(tokenString string) (*Claims, error) {
+func (v *verifier) VerifyAccessToken(tokenString string) (*Claims, error) {
 	claims, err := v.VerifyToken(tokenString)
 	if err != nil {
 		return nil, err

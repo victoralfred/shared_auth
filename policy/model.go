@@ -50,12 +50,6 @@ type PolicyUpdateEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// PolicyUpdateConsumer interface for consuming policy updates
-type PolicyUpdateConsumer interface {
-	Subscribe(handler func(PolicyUpdateEvent)) error
-	Unsubscribe() error
-}
-
 // EngineStats provides engine statistics
 type EngineStats struct {
 	PolicyCount  int

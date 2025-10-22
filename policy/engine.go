@@ -11,17 +11,42 @@ import (
 	"github.com/victoralfred/shared_auth/cache"
 )
 
-// Engine provides local policy evaluation without database queries
-type Engine struct {
+// engine is the private implementation of the Engine interface.
+//
+// This struct is private to allow internal changes without breaking clients.
+// Clients should only depend on the public Engine interface.
+type engine struct {
 	cache     cache.Cache
 	evaluator *Evaluator
 	policies  *PolicyStore
 	mu        sync.RWMutex
 }
 
-// NewEngine creates a policy engine with local caching
-func NewEngine(cacheBackend cache.Cache) *Engine {
-	return &Engine{
+// NewEngine creates a policy engine with local caching.
+//
+// Returns the public Engine interface to hide implementation details.
+// This allows the internal implementation to change without breaking clients.
+//
+// Parameters:
+//   - cacheBackend: Cache implementation (provided by consuming service)
+//
+// Example:
+//
+//	// Service creates cache using its own Redis infrastructure
+//	type myRedisCache struct { client *redis.Client }
+//	func (c *myRedisCache) Get(key string) (interface{}, bool) { ... }
+//	func (c *myRedisCache) Set(key string, val interface{}, ttl time.Duration) error { ... }
+//	// ... implement other cache.Cache methods
+//
+//	redisCache := &myRedisCache{client: redisClient}
+//
+//	// Create engine (returns interface)
+//	engine := policy.NewEngine(redisCache)
+//
+//	// Load policies
+//	engine.LoadPolicies(policies)
+func NewEngine(cacheBackend cache.Cache) Engine {
+	return &engine{
 		cache:     cacheBackend,
 		evaluator: NewEvaluator(),
 		policies:  NewPolicyStore(),
@@ -30,7 +55,7 @@ func NewEngine(cacheBackend cache.Cache) *Engine {
 
 // LoadPolicies loads policies into local store
 // Called on startup or policy update
-func (e *Engine) LoadPolicies(policies []Policy) error {
+func (e *engine) LoadPolicies(policies []Policy) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -39,7 +64,7 @@ func (e *Engine) LoadPolicies(policies []Policy) error {
 
 // CheckPermission evaluates permission locally
 // NO database queries - uses cached policies only
-func (e *Engine) CheckPermission(ctx context.Context, req PermissionRequest) (*Decision, error) {
+func (e *engine) CheckPermission(ctx context.Context, req PermissionRequest) (*Decision, error) {
 	// Check cache first
 	cacheKey := e.buildCacheKey(req)
 
@@ -57,7 +82,7 @@ func (e *Engine) CheckPermission(ctx context.Context, req PermissionRequest) (*D
 }
 
 // buildCacheKey creates cache key for permission request
-func (e *Engine) buildCacheKey(req PermissionRequest) string {
+func (e *engine) buildCacheKey(req PermissionRequest) string {
 	baseKey := fmt.Sprintf("perm:%s:%s:%s:%s",
 		req.UserID, req.TenantID, req.Resource, req.Action)
 
@@ -75,7 +100,7 @@ func (e *Engine) buildCacheKey(req PermissionRequest) string {
 }
 
 // hashContext creates a deterministic hash of the context map
-func (e *Engine) hashContext(context map[string]interface{}) string {
+func (e *engine) hashContext(context map[string]interface{}) string {
 	// Sort keys for deterministic JSON marshaling
 	data, err := json.Marshal(context)
 	if err != nil {
@@ -88,7 +113,7 @@ func (e *Engine) hashContext(context map[string]interface{}) string {
 }
 
 // evaluate performs local policy evaluation
-func (e *Engine) evaluate(req PermissionRequest) *Decision {
+func (e *engine) evaluate(req PermissionRequest) *Decision {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -158,7 +183,7 @@ func (e *Engine) evaluate(req PermissionRequest) *Decision {
 }
 
 // isAdmin checks if user has admin role
-func (e *Engine) isAdmin(roles []string) bool {
+func (e *engine) isAdmin(roles []string) bool {
 	for _, role := range roles {
 		if role == "admin" || role == "super_admin" {
 			return true
@@ -168,7 +193,7 @@ func (e *Engine) isAdmin(roles []string) bool {
 }
 
 // hasRequiredRole checks if user has any of the required roles
-func (e *Engine) hasRequiredRole(userRoles, requiredRoles []string) bool {
+func (e *engine) hasRequiredRole(userRoles, requiredRoles []string) bool {
 	if len(requiredRoles) == 0 {
 		return true // No role requirement
 	}
@@ -184,7 +209,7 @@ func (e *Engine) hasRequiredRole(userRoles, requiredRoles []string) bool {
 }
 
 // hasAction checks if action is in allowed actions
-func (e *Engine) hasAction(allowedActions []string, action string) bool {
+func (e *engine) hasAction(allowedActions []string, action string) bool {
 	for _, allowed := range allowedActions {
 		if allowed == action || allowed == "*" {
 			return true
@@ -194,13 +219,13 @@ func (e *Engine) hasAction(allowedActions []string, action string) bool {
 }
 
 // InvalidateCache invalidates cache for user
-func (e *Engine) InvalidateCache(userID, tenantID string) error {
+func (e *engine) InvalidateCache(userID, tenantID string) error {
 	pattern := fmt.Sprintf("perm:%s:%s:*", userID, tenantID)
 	return e.cache.DeletePattern(pattern)
 }
 
 // SubscribeToPolicyUpdates subscribes to policy change events
-func (e *Engine) SubscribeToPolicyUpdates(consumer PolicyUpdateConsumer) error {
+func (e *engine) SubscribeToPolicyUpdates(consumer PolicyUpdateConsumer) error {
 	return consumer.Subscribe(func(event PolicyUpdateEvent) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -218,7 +243,7 @@ func (e *Engine) SubscribeToPolicyUpdates(consumer PolicyUpdateConsumer) error {
 }
 
 // Stats returns engine statistics
-func (e *Engine) Stats() EngineStats {
+func (e *engine) Stats() EngineStats {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
