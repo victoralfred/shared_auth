@@ -5,11 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - 2025-10-22
+## [1.0.0] - 2025-10-22
 
-### Breaking Changes
+### Initial Release
 
-This release fundamentally changes the library architecture to follow interface-based design principles. Services must now provide their own infrastructure implementations.
+First stable release with interface-based architecture. This library provides pure abstractions for JWT verification and policy evaluation, allowing services to provide their own infrastructure implementations.
 
 #### Removed
 - **Removed** `vault/` package - Library no longer provides Vault client
@@ -45,7 +45,7 @@ publicKey, _ := crypto.LoadPublicKeyFromVault(ctx, vaultClient, "jwt", "public_k
 verifier := jwt.NewVerifier(publicKey, "kubemanager", "my-service")
 ```
 
-#### After (v2.0)
+#### After (v1.0)
 
 ```go
 // 1. Implement cache.Cache using YOUR Redis
