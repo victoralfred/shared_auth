@@ -41,4 +41,4 @@
 package shared_auth
 
 // Version is the current version of the shared_auth library
-const Version = "v1.0.0"
+const Version = "v1.0.1"

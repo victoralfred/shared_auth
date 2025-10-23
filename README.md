@@ -393,7 +393,7 @@ MIT License - see [LICENSE](LICENSE)
 
 ## Version
 
-Current: v1.0.0 (Interface-based design)
+Current: v1.0.1 (Interface-based design)
 
 ## Breaking Changes from v1.x
 

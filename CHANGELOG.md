@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2025-10-23
+
+### Fixed
+- **Fixed** Module import error: Added root package file `shared_auth.go` to allow `go get github.com/victoralfred/shared_auth` to work correctly
+- **Fixed** Missing package documentation at module root level
+
+### Added
+- **Added** Root package documentation explaining the library's architecture and usage
+- **Added** Version constant for version tracking
+
 ## [1.0.0] - 2025-10-22
 
 ### Initial Release
